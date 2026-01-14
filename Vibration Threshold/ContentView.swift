@@ -78,6 +78,7 @@ class HapticManager: ObservableObject {
     @Published var results: [ThresholdResult] = []
     
     private var engine: CHHapticEngine?
+    private var player: CHHapticPatternPlayer?
     private var startTime: Date?
     private let rampDuration: TimeInterval = 10.0
     private let maxDelay: TimeInterval = 4.0 // Maximum random delay in seconds
@@ -100,33 +101,53 @@ class HapticManager: ObservableObject {
         
         do {
             engine = try CHHapticEngine()
+            
+            engine?.stoppedHandler = { reason in
+                print("Engine stopped: \(reason.rawValue)")
+            }
+            
+            engine?.resetHandler = { [weak self] in
+                print("Engine reset, restarting…")
+                do {
+                    try self?.engine?.start()
+                } catch {
+                    print("Failed to restart engine: \(error)")
+                }
+            }
+            
             try engine?.start()
         } catch {
-            print("Error creating haptic engine: \(error)")
+            print("Error creating/starting haptic engine: \(error)")
         }
     }
     
     func startRamp() {
-        guard engine != nil else { return }
+        guard let engine = engine else { return }
         
         isRunning = true
         isWaiting = true
         
-        // Generate random delay between 0 and maxDelay seconds
         let randomDelay = TimeInterval.random(in: 0...maxDelay)
         
-        // Wait for random delay, then start vibration
-        DispatchQueue.main.asyncAfter(deadline: .now() + randomDelay) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + randomDelay) { [weak self] in
+            guard let self = self else { return }
             self.isWaiting = false
             self.startTime = Date()
-            self.playHapticRamp()
+            
+            do {
+                try engine.start()
+                self.playHapticRamp()
+            } catch {
+                print("Failed to start engine before ramp: \(error)")
+                self.isRunning = false
+                self.isWaiting = false
+            }
         }
     }
     
     private func playHapticRamp() {
         guard let engine = engine else { return }
         
-        // Create a ramping intensity pattern
         var events: [CHHapticEvent] = []
         let steps = 100
         
@@ -156,13 +177,17 @@ class HapticManager: ObservableObject {
         do {
             let pattern = try CHHapticPattern(events: events, parameters: [])
             let player = try engine.makePlayer(with: pattern)
+            self.player = player
+            
             try player.start(atTime: 0)
             
-            // Auto-stop after ramp completes
-            DispatchQueue.main.asyncAfter(deadline: .now() + rampDuration) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + rampDuration) { [weak self] in
+                guard let self = self else { return }
                 if self.isRunning && !self.isWaiting {
                     self.isRunning = false
                 }
+                try? self.player?.stop(atTime: 0)
+                self.player = nil
             }
         } catch {
             print("Error playing haptic pattern: \(error)")
@@ -188,13 +213,9 @@ class HapticManager: ObservableObject {
         isRunning = false
         isWaiting = false
         
-        // Stop the engine
-        engine?.stop(completionHandler: { error in
-            if let error = error {
-                print("Error stopping engine: \(error)")
-            }
-            try? self.engine?.start()
-        })
+        // Stop only the current pattern, keep engine alive
+        try? player?.stop(atTime: 0)
+        player = nil
     }
     
     func exportResults() {
