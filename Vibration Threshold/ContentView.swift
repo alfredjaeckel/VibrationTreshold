@@ -7,8 +7,8 @@ import Combine
 enum HapticCondition: String, CaseIterable, Codable {
     case leftPalm = "Left Palm"
     case rightPalm = "Right Palm"
-    case leftBack = "Left Back of Hand"
-    case rightBack = "Right Back of Hand"
+    case leftBack = "Back of Left Hand"
+    case rightBack = "Back of Right Hand"
 }
 
 struct ThresholdResult: Identifiable, Codable {
@@ -66,7 +66,7 @@ struct PseudonymEntryView: View {
             }
             .padding(.horizontal)
             
-            Text("This pseudonym will be used to label all test results for this participant.")
+            Text("This pseudonym will be used to label all your test results.")
                 .font(.footnote)
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
@@ -238,7 +238,7 @@ class HapticManager: ObservableObject {
     
     private var pendingDelayWorkItem: DispatchWorkItem?
 
-    private let rampDuration: TimeInterval = 2.0
+    private let rampDuration: TimeInterval = 20.0
     private let maxHoldDuration: TimeInterval = 3.0
     private let maxDelay: TimeInterval = 4.0
     
