@@ -97,93 +97,114 @@ struct TestView: View {
     @StateObject private var hapticManager = HapticManager()
     
     var body: some View {
-        VStack(spacing: 30) {
-            Spacer()
-            
-            Text(hapticManager.currentCondition?.rawValue ?? "All trials completed")
-                .font(.system(size: 36, weight: .bold))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Text(trialsRemainingText)
-                .font(.headline)
-                .foregroundColor(.gray)
-            
-            Spacer()
-            
-            VStack(spacing: 20) {
-                if hapticManager.currentCondition == nil {
-                    Text("No more trials for this participant.")
-                        .foregroundColor(.gray)
-                        .padding(.bottom, 10)
-                    
-                    Button(action: {
-                        hapticManager.exportResultsForParticipant(participantID)
-                        onFinish()
-                    }) {
-                        Text("Finish & Export")
-                            .font(.system(size: 22, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.orange)
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
+        ZStack {
+            VStack(spacing: 30) {
+                Spacer()
+                
+                Text(hapticManager.currentCondition?.rawValue ?? "All trials completed")
+                    .font(.system(size: 36, weight: .bold))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                Text(trialsRemainingText)
+                    .font(.headline)
+                    .foregroundColor(.gray)
+                
+                Spacer()
+                
+                VStack(spacing: 20) {
+                    if hapticManager.currentCondition == nil {
+                        Text("No more trials for this participant.")
+                            .foregroundColor(.gray)
+                            .padding(.bottom, 10)
+                        
+                        Button(action: {
+                            hapticManager.exportResultsForParticipant(participantID)
+                            onFinish()
+                        }) {
+                            Text("Finish & Export")
+                                .font(.system(size: 22, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.orange)
+                                .foregroundColor(.white)
+                                .cornerRadius(16)
+                        }
+                        .padding(.horizontal, 40)
+                        
+                    } else if hapticManager.isRunning {
+                        Button(action: {
+                            hapticManager.stopAndRecord(participant: participantID)
+                        }) {
+                            Text("FELT IT")
+                                .font(.system(size: 28, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.green)
+                                .foregroundColor(.white)
+                                .cornerRadius(16)
+                        }
+                        .padding(.horizontal, 40)
+                        
+                    } else {
+                        Button(action: {
+                            hapticManager.startCurrentTrial(participant: participantID)
+                        }) {
+                            Text("START")
+                                .font(.system(size: 28, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(hapticManager.currentCondition == nil ? Color.gray : Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(16)
+                        }
+                        .padding(.horizontal, 40)
+                        .disabled(hapticManager.currentCondition == nil)
                     }
-                    .padding(.horizontal, 40)
                     
-                } else if hapticManager.isRunning {
-                    Button(action: {
-                        hapticManager.stopAndRecord(participant: participantID)
-                    }) {
-                        Text("FELT IT")
-                            .font(.system(size: 28, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.green)
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
+                    if hapticManager.hasAnyResult(for: participantID) {
+                        Button(action: {
+                            hapticManager.retryPreviousTrial(participant: participantID)
+                        }) {
+                            Text("Retry previous trial")
+                                .font(.body)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Color.gray.opacity(0.15))
+                                .foregroundColor(.black)
+                                .cornerRadius(10)
+                        }
+                        .padding(.horizontal, 40)
+                        .disabled(!hapticManager.canRetryPreviousTrial(participant: participantID) || hapticManager.isRunning)
                     }
-                    .padding(.horizontal, 40)
-                    
-                } else {
-                    Button(action: {
-                        hapticManager.startCurrentTrial(participant: participantID)
-                    }) {
-                        Text("START")
-                            .font(.system(size: 28, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(hapticManager.currentCondition == nil ? Color.gray : Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(16)
-                    }
-                    .padding(.horizontal, 40)
-                    .disabled(hapticManager.currentCondition == nil)
                 }
                 
-                // Show retry only after at least one trial for this participant
-                if hapticManager.hasAnyResult(for: participantID) {
-                    Button(action: {
-                        hapticManager.retryPreviousTrial(participant: participantID)
-                    }) {
-                        Text("Retry previous trial")
-                            .font(.body)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(Color.gray.opacity(0.15))
-                            .foregroundColor(.black)
-                            .cornerRadius(10)
-                    }
-                    .padding(.horizontal, 40)
-                    .disabled(!hapticManager.canRetryPreviousTrial(participant: participantID) || hapticManager.isRunning)
-                }
+                Spacer()
             }
             
-            Spacer()
+            // Timeout feedback overlay
+            if hapticManager.justTimedOut {
+                VStack {
+                    Text("No response – trial recorded automatically.")
+                        .padding()
+                        .background(Color.black.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                }
+                .transition(.opacity)
+            }
         }
         .onAppear {
             hapticManager.prepareSequenceIfNeeded(for: participantID)
         }
+        .onChange(of: hapticManager.justTimedOut, initial: false) { _, newValue in
+                    guard newValue else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation {
+                            hapticManager.justTimedOut = false
+                        }
+                    }
+                }
     }
     
     private var trialsRemainingText: String {
@@ -192,6 +213,7 @@ struct TestView: View {
         return "Trials remaining: \(remaining) of \(hapticManager.totalTrialsPerParticipant)"
     }
 }
+
 
 // MARK: - Haptic Manager
 
@@ -203,6 +225,9 @@ class HapticManager: ObservableObject {
     
     @Published private(set) var currentCondition: HapticCondition?
     @Published private(set) var currentTrialNumber: Int = 0   // 1-based
+    
+    @Published var justTimedOut: Bool = false
+
     let repetitionsPerCondition = 3
     var totalTrialsPerParticipant: Int { HapticCondition.allCases.count * repetitionsPerCondition }
     
@@ -350,6 +375,8 @@ class HapticManager: ObservableObject {
         
         results.append(result)
         lastResult = result
+        
+        justTimedOut = true
         
         print("Timed out: participant=\(result.participant), " +
               "condition=\(result.condition.rawValue), " +
