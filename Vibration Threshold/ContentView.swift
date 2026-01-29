@@ -257,7 +257,7 @@ class HapticManager: ObservableObject {
     
     @Published var justTimedOut: Bool = false
 
-    let repetitionsPerCondition = 3
+    let repetitionsPerCondition = 4
     var totalTrialsPerParticipant: Int { HapticCondition.allCases.count * repetitionsPerCondition }
     
     private var trialSequence: [HapticCondition] = []
