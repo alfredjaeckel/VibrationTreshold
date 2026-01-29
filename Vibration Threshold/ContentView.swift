@@ -11,9 +11,16 @@ enum HapticCondition: String, CaseIterable, Codable {
     case rightBack = "Back of Right Hand"
 }
 
+enum DominantHand: String, CaseIterable, Codable {
+    case left = "Left"
+    case right = "Right"
+    case ambidextrous = "Ambidextrous"
+}
+
 struct ThresholdResult: Identifiable, Codable {
     let id = UUID()
     let participant: String
+    let dominantHand: DominantHand
     let condition: HapticCondition
     let repetitionIndex: Int   // 1...3
     let globalTrialIndex: Int  // 1...12 for each participant
@@ -26,20 +33,24 @@ struct ThresholdResult: Identifiable, Codable {
 
 struct ContentView: View {
     @State private var participantID: String = ""
+    @State private var dominantHand: DominantHand = .right
     @State private var hasStarted = false
     
     var body: some View {
         if hasStarted {
             TestView(
                 participantID: participantID,
+                dominantHand: dominantHand,
                 onFinish: {
                     participantID = ""
+                    dominantHand = .right
                     hasStarted = false
-                }
+                } 
             )
         } else {
             PseudonymEntryView(
                 participantID: $participantID,
+                dominantHand: $dominantHand,
                 onStart: { hasStarted = true }
             )
         }
@@ -50,6 +61,7 @@ struct ContentView: View {
 
 struct PseudonymEntryView: View {
     @Binding var participantID: String
+    @Binding var dominantHand: DominantHand
     var onStart: () -> Void
     
     var body: some View {
@@ -63,6 +75,18 @@ struct PseudonymEntryView: View {
                     .font(.headline)
                 TextField("e.g. P01, blue_fox, etc.", text: $participantID)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+            .padding(.horizontal)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Select dominant hand")
+                    .font(.headline)
+                Picker("Dominant Hand", selection: $dominantHand) {
+                    ForEach(DominantHand.allCases, id: \.self) { hand in
+                        Text(hand.rawValue).tag(hand)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
             .padding(.horizontal)
             
@@ -93,6 +117,7 @@ struct PseudonymEntryView: View {
 
 struct TestView: View {
     let participantID: String
+    let dominantHand: DominantHand
     let onFinish: () -> Void
     @StateObject private var hapticManager = HapticManager()
     
@@ -134,7 +159,8 @@ struct TestView: View {
                         
                     } else if hapticManager.isRunning {
                         Button(action: {
-                            hapticManager.stopAndRecord(participant: participantID)
+                            hapticManager.stopAndRecord(participant: participantID,
+                                                        dominantHand: dominantHand)
                         }) {
                             Text("FELT IT")
                                 .font(.system(size: 28, weight: .semibold))
@@ -148,7 +174,8 @@ struct TestView: View {
                         
                     } else {
                         Button(action: {
-                            hapticManager.startCurrentTrial(participant: participantID)
+                            hapticManager.startCurrentTrial(participant: participantID,
+                                                            dominantHand: dominantHand)
                         }) {
                             Text("START")
                                 .font(.system(size: 28, weight: .semibold))
@@ -225,6 +252,8 @@ class HapticManager: ObservableObject {
     
     @Published private(set) var currentCondition: HapticCondition?
     @Published private(set) var currentTrialNumber: Int = 0   // 1-based
+    @Published private(set) var currentParticipant: String?
+    @Published private(set) var currentDominantHand: DominantHand?
     
     @Published var justTimedOut: Bool = false
 
@@ -288,12 +317,14 @@ class HapticManager: ObservableObject {
         }
     }
     
-    func startCurrentTrial(participant: String) {
+    func startCurrentTrial(participant: String, dominantHand: DominantHand) {
         guard !participant.isEmpty,
               currentCondition != nil,
               !isRunning
         else { return }
-        startRamp(participant: participant)
+        currentParticipant = participant
+        currentDominantHand = dominantHand
+        startRamp()
     }
     
     private func advanceToNextTrial() {
@@ -302,6 +333,8 @@ class HapticManager: ObservableObject {
             currentCondition = trialSequence[currentTrialNumber - 1]
         } else {
             currentCondition = nil
+            currentParticipant = nil
+            currentDominantHand = nil
         }
     }
     
@@ -353,9 +386,9 @@ class HapticManager: ObservableObject {
     }
     
     private func recordTimeoutResult(participant: String) {
-        guard let condition = currentCondition else { return }
+        guard let condition = currentCondition,
+              let dominantHand = currentDominantHand else { return }
         
-        // If you want to store the full duration as time
         let elapsedTime = rampDuration + maxHoldDuration
         let intensity = 2.0   // special code: no response / timed out
         
@@ -365,6 +398,7 @@ class HapticManager: ObservableObject {
         
         let result = ThresholdResult(
             participant: participant,
+            dominantHand: dominantHand,
             condition: condition,
             repetitionIndex: repetitionIndex,
             globalTrialIndex: currentTrialNumber,
@@ -375,7 +409,6 @@ class HapticManager: ObservableObject {
         
         results.append(result)
         lastResult = result
-        
         justTimedOut = true
         
         print("Timed out: participant=\(result.participant), " +
@@ -393,9 +426,11 @@ class HapticManager: ObservableObject {
     
     // MARK: - Haptics per trial
     
-    private func startRamp(participant: String) {
-        guard engine != nil else { return }
-
+    private func startRamp() {
+        guard engine != nil,
+              currentParticipant != nil,
+              currentDominantHand != nil else { return }
+        
         isRunning = true
         isWaiting = true
 
@@ -414,7 +449,7 @@ class HapticManager: ObservableObject {
 
             do {
                 try self.engine?.start()
-                self.playHapticRamp(participant: participant)
+                self.playHapticRamp()
             } catch {
                 print("Failed to start engine before ramp: \(error)")
                 self.isRunning = false
@@ -428,8 +463,9 @@ class HapticManager: ObservableObject {
         }
     }
     
-    private func playHapticRamp(participant: String) {
-        guard let engine = engine else { return }
+    private func playHapticRamp() {
+        guard let engine = engine,
+              let participant = currentParticipant else { return }
         
         let totalDuration = rampDuration + maxHoldDuration
         
@@ -480,7 +516,7 @@ class HapticManager: ObservableObject {
         }
     }
     
-    func stopAndRecord(participant: String) {
+    func stopAndRecord(participant: String, dominantHand: DominantHand) {
         guard !participant.isEmpty,
               let condition = currentCondition
         else { return }
@@ -506,6 +542,7 @@ class HapticManager: ObservableObject {
         
         let result = ThresholdResult(
             participant: participant,
+            dominantHand: dominantHand,
             condition: condition,
             repetitionIndex: repetitionIndex,
             globalTrialIndex: currentTrialNumber,
@@ -544,10 +581,11 @@ class HapticManager: ObservableObject {
             return
         }
         
-        let header = "Participant,Condition,Repetition,GlobalTrial,Time(s),Intensity,Timestamp"
+        let header = "Participant,DominantHand,Condition,Repetition,GlobalTrial,Time(s),Intensity,Timestamp"
         let rows = participantResults.map { r in
             [
                 r.participant,
+                r.dominantHand.rawValue,
                 r.condition.rawValue,
                 "\(r.repetitionIndex)",
                 "\(r.globalTrialIndex)",
