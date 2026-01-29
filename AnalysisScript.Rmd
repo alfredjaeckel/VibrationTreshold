@@ -1,0 +1,219 @@
+---
+title: "Intensity Test"
+output: html_notebook
+---
+
+```{r}
+######################### SETUP ######################################
+library(tidyverse)
+library(effectsize)
+```
+
+# Analysis
+
+```{r}
+#################### 1. LOAD & PREPARE RAW DATA #######################
+
+files <- list.files("data", pattern = "\\.csv$", full.names = TRUE)
+
+raw_dat <- map_dfr(
+  files,
+  ~ read_delim(.x, delim = ",", show_col_types = FALSE)
+) %>%
+  # exclude first trial
+  filter(as.numeric(Repetition) %in% c(2, 3, 4)) %>%
+  # drop ambidextrous participants
+  filter(!DominantHand %in% c("Ambidextrous", "ambidextrous", "Ambi", "ambi"))
+
+# Build trial-level data frame: trials
+trials <- raw_dat %>%
+  mutate(
+    id = factor(Participant),
+
+    hand = case_when(
+      str_detect(Condition, regex("Left",  ignore_case = TRUE))  ~ "left",
+      str_detect(Condition, regex("Right", ignore_case = TRUE))  ~ "right",
+      TRUE ~ NA_character_
+    ),
+
+    surface = case_when(
+      str_detect(Condition, regex("Palm", ignore_case = TRUE)) ~ "palm",
+      str_detect(Condition, regex("Back", ignore_case = TRUE)) ~ "back",
+      TRUE ~ NA_character_
+    ),
+
+    orig_intensity = as.numeric(Intensity),
+
+    sensitivity = as.numeric(Intensity),
+    sensitivity = if_else(sensitivity == 2, 1, sensitivity),  # recode 2 -> 1
+
+    # now only "Left" or "Right" remain
+    dominant_hand = case_when(
+      DominantHand %in% c("Right", "right") ~ "right",
+      DominantHand %in% c("Left",  "left")  ~ "left",
+      TRUE                                   ~ NA_character_
+    ),
+
+    dom_hand = case_when(
+      dominant_hand == "right" & hand == "right" ~ "dominant",
+      dominant_hand == "right" & hand == "left"  ~ "non_dominant",
+      dominant_hand == "left"  & hand == "left"  ~ "dominant",
+      dominant_hand == "left"  & hand == "right" ~ "non_dominant",
+      TRUE                                       ~ NA_character_
+    )
+  ) %>%
+  select(id, Repetition, hand, surface,
+         orig_intensity, sensitivity, dom_hand) %>%
+  mutate(
+    hand        = factor(hand,    levels = c("left", "right")),
+    surface     = factor(surface, levels = c("palm", "back")),
+    dom_hand    = factor(dom_hand, levels = c("dominant", "non_dominant")),
+    sensitivity = as.numeric(sensitivity),
+    id          = factor(id)
+  )
+
+#################### 2. AGGREGATED DATAFRAME FOR ANOVA/VIZ (df) ######
+# One row per id × dom_hand × surface (mean over reps 2 & 3)
+
+df <- trials %>%
+  group_by(id, dom_hand, surface) %>%
+  summarise(
+    sensitivity = mean(sensitivity, na.rm = TRUE),
+    .groups     = "drop"
+  )
+
+#################### 3. 2×2 REPEATED-MEASURES ANOVA ##################
+
+fit <- aov(
+  sensitivity ~ dom_hand * surface + Error(id / (dom_hand * surface)),
+  data = df
+)
+
+summary(fit)
+
+eta_squared(fit, partial = TRUE)
+
+#################### 4. CONDITION MEANS (IN %) #######################
+
+cond_means <- df %>%
+  group_by(dom_hand, surface) %>%
+  summarise(
+    mean_sens_pct = mean(sensitivity, na.rm = TRUE) * 100,
+    sd_sens_pct   = sd(sensitivity, na.rm = TRUE) * 100,
+    n             = n(),
+    .groups       = "drop"
+  )
+
+cond_means
+```
+
+
+# Boxplot
+
+
+```{r}
+# 4-level condition factor (if not already done)
+trials <- trials %>%
+  mutate(
+    # percentage 0–100
+    sensitivity_pct = sensitivity * 100,
+    # condition factor in desired order
+    condition = factor(
+      paste(dom_hand, surface, sep = "_"),
+      levels = c("dominant_palm", "non_dominant_palm",
+                 "dominant_back", "non_dominant_back")
+    )
+  )
+
+
+# One count (misses) per box
+counts_2 <- trials %>%
+  group_by(condition) %>%
+  summarise(
+    count_intensity_2 = sum(orig_intensity == 2, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Build x-axis labels with misses included
+cond_levels <- levels(trials$condition)
+
+x_labs <- setNames(
+  paste0(
+    c("Dominant\nPalm\n", "Non-Dominant\nPalm\n", "Dominant\nBack\n", "Non-Dominant\nBack\n"),
+    "\n",
+    counts_2$count_intensity_2[match(cond_levels, counts_2$condition)],
+    "\nMisses"
+  ),
+  cond_levels
+)
+
+ggplot(trials, aes(x = condition, y = sensitivity_pct, fill = dom_hand)) +
+  geom_boxplot(width = 0.6) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, 10),
+    labels = scales::label_percent(scale = 1)
+  ) +
+  coord_cartesian(ylim = c(0, 100)) +
+  scale_x_discrete(labels = x_labs) +
+  scale_fill_manual(values = c(
+    "dominant"     = "#f39747",
+    "non_dominant" = "#1f78b4"
+  )) +
+  labs(
+    x = "",
+    y = "Intensity (%)",
+  ) +
+  theme_minimal(base_family = "Arial")+
+  theme(legend.position = "none",
+        axis.text.x  = element_text(size = 10),
+        aspect.ratio = 1
+  )
+```
+
+
+# Interaction Graph
+
+
+```{r}
+summary_df <- df %>%
+  group_by(dom_hand, surface) %>%
+  summarise(
+    mean_sens = mean(sensitivity, na.rm = TRUE) * 100,  # to percent
+    se_sens   = (sd(sensitivity, na.rm = TRUE) / sqrt(n())) * 100,
+    .groups   = "drop"
+  )
+
+ggplot(summary_df, aes(x = dom_hand, y = mean_sens,
+                       group = surface, color = surface)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  geom_errorbar(
+    aes(ymin = mean_sens - se_sens, ymax = mean_sens + se_sens),
+    width = 0.1
+  ) +
+  scale_x_discrete(
+    labels = c(
+      "dominant"     = "Dominant",
+      "non_dominant" = "Non-Dominant"
+    )
+  ) +
+  scale_color_manual(
+    values = c("palm" = "#f39747", "back" = "#1f78b4"),
+    labels = c(
+      "palm" = "Palm",
+      "back" = "Back"
+    )
+  ) +
+  labs(
+    x = "Hand",
+    y = "Mean Intensity (%)",
+    color = "Surface"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    aspect.ratio = 1   # makes it square-ish
+  )
+```
+
